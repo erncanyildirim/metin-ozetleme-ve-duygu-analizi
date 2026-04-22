@@ -1,0 +1,65 @@
+# ============================================
+# Türkçe Duygu Analizi & Metin Özetleme Projesi
+# .gitignore
+# ============================================
+
+# ---------- Veri Dosyaları ----------
+# Büyük CSV/TSV/Excel dosyaları GitHub'a yüklenmemeli
+data/*.csv
+data/*.tsv
+data/*.xlsx
+data/*.json
+data/*.parquet
+*.csv
+*.tsv
+
+# ---------- Jupyter Notebook Checkpoint ----------
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# ---------- Python Bytecode ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# ---------- Virtual Environment ----------
+venv/
+env/
+.venv/
+.env
+
+# ---------- IDE / Editör ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ---------- Model Dosyaları (büyük) ----------
+models/*.pkl
+models/*.joblib
+models/*.h5
+models/*.pt
+models/*.bin
+models/*.safetensors
+
+# ---------- Hugging Face Cache ----------
+.cache/
+transformers_cache/
+
+# ---------- Log & Çıktı ----------
+*.log
+logs/
+outputs/
+runs/
+
+# ---------- OS ----------
+Thumbs.db
+.DS_Store
+
+# ---------- Dağıtım ----------
+dist/
+build/
+*.egg-info/
