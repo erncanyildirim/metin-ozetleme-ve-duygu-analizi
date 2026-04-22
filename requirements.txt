@@ -1,0 +1,34 @@
+# ============================================
+# Türkçe Duygu Analizi & Metin Özetleme Projesi
+# Gerekli Kütüphaneler
+# ============================================
+
+# --- Temel ---
+pandas>=1.5.0
+numpy>=1.21.0
+
+# --- Makine Öğrenmesi (Eren Can) ---
+scikit-learn>=1.2.0
+joblib>=1.2.0
+
+# --- NLP Ön İşleme ---
+regex>=2022.1.18
+
+# --- Transformer Modelleri (Hamza) ---
+transformers>=4.30.0
+torch>=2.0.0
+sentencepiece>=0.1.99
+
+# --- Değerlendirme Metrikleri ---
+rouge-score>=0.1.2
+bert-score>=0.3.13
+
+# --- Veri İndirme ---
+kaggle>=1.5.0
+
+# --- Web Arayüzü ---
+streamlit>=1.28.0
+
+# --- Jupyter Notebook ---
+notebook>=7.0.0
+nbstripout>=0.6.0
