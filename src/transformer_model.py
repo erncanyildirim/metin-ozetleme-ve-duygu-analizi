@@ -325,17 +325,19 @@ def predict_sentiment_transformer(text: str, model_pipeline=None) -> dict:
 # ============================================================
 def load_summarization_model(model_name: str = None):
     """
-    mT5 özetleme pipeline'ını yükler.
+    mT5 özetleme modelini yükler. Yeni transformers sürümlerinde (>=4.46)
+    pipeline("summarization") kaldırıldığı için doğrudan model + tokenizer
+    döndürüyoruz.
 
     Türkçe-spesifik fine-tune yapılmadığı için zero-shot kullanılır.
 
     Returns:
-        transformers.Pipeline: summarization pipeline.
+        dict: {'model': model, 'tokenizer': tokenizer, 'device': device}
     """
-    from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
+    from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+    import torch
 
     if model_name is None:
-        # Eğitilmiş varsa kullan, yoksa hazır mT5-small
         if os.path.exists(SUMMARIZATION_OUTPUT_DIR):
             model_name = SUMMARIZATION_OUTPUT_DIR
         else:
@@ -347,24 +349,16 @@ def load_summarization_model(model_name: str = None):
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-
-        return pipeline(
-            "summarization",
-            model=model,
-            tokenizer=tokenizer,
-            device=0 if _has_gpu() else -1,
-        )
     except Exception as e:
         print(f"   ⚠️  Model yüklenemedi: {e}")
         print(f"   Yedek: google/mt5-small kullanılıyor")
         tokenizer = AutoTokenizer.from_pretrained("google/mt5-small")
         model = AutoModelForSeq2SeqLM.from_pretrained("google/mt5-small")
-        return pipeline(
-            "summarization",
-            model=model,
-            tokenizer=tokenizer,
-            device=0 if _has_gpu() else -1,
-        )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = model.to(device)
+
+    return {"model": model, "tokenizer": tokenizer, "device": device}
 
 
 def summarize_multiple_reviews(
@@ -375,34 +369,50 @@ def summarize_multiple_reviews(
 ) -> str:
     """
     Birden fazla yorumu birleştirip tek bir özet üretir.
+    model_pipeline parametresi artık dict bekliyor: {'model', 'tokenizer', 'device'}
 
     Args:
         reviews: Yorum metni listesi.
-        model_pipeline: Yüklenmiş özetleme pipeline'ı.
+        model_pipeline: load_summarization_model() çıktısı (dict) ya da None.
         max_length: Üretilen özetin maks. token uzunluğu.
         min_length: Üretilen özetin min. token uzunluğu.
 
     Returns:
         str: Üretilen özet.
     """
+    import torch
+
     if model_pipeline is None:
         model_pipeline = load_summarization_model()
 
-    # Yorumları birleştir (özetleme için)
+    model = model_pipeline["model"]
+    tokenizer = model_pipeline["tokenizer"]
+    device = model_pipeline["device"]
+
+    # Yorumları birleştir
     combined = " ".join(reviews)
 
-    # mT5'in input limiti 512 token civarında, kelime bazında ~400'lü
-    # Truncation transformers tarafından otomatik yapılacak
     try:
-        summary = model_pipeline(
+        inputs = tokenizer(
             combined,
-            max_length=max_length,
-            min_length=min_length,
-            do_sample=False,
-            num_beams=4,
+            return_tensors="pt",
+            max_length=512,
             truncation=True,
-        )
-        return summary[0]["summary_text"]
+        ).to(device)
+
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_length=max_length,
+                min_length=min_length,
+                num_beams=4,
+                do_sample=False,
+                early_stopping=True,
+                no_repeat_ngram_size=3,  # Tekrarlama cezası
+            )
+
+        summary = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return summary if summary.strip() else _fallback_extractive_summary(reviews)
     except Exception as e:
         print(f"⚠️  Özetleme hatası: {e}")
         return _fallback_extractive_summary(reviews)
