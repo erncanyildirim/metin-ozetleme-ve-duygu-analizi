@@ -6,6 +6,8 @@
 # --- Temel ---
 pandas>=1.5.0
 numpy>=1.21.0
+matplotlib>=3.5.0
+seaborn>=0.12.0
 
 # --- Makine Öğrenmesi (Eren Can) ---
 scikit-learn>=1.2.0
@@ -18,6 +20,9 @@ regex>=2022.1.18
 transformers>=4.30.0
 torch>=2.0.0
 sentencepiece>=0.1.99
+datasets>=2.14.0
+accelerate>=0.20.0
+protobuf>=3.20.0
 
 # --- Değerlendirme Metrikleri ---
 rouge-score>=0.1.2
@@ -32,3 +37,4 @@ streamlit>=1.28.0
 # --- Jupyter Notebook ---
 notebook>=7.0.0
 nbstripout>=0.6.0
+ipywidgets>=8.0.0

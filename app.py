@@ -116,15 +116,30 @@ def load_baseline_model():
 
 
 @st.cache_resource
-def load_transformer_model():
-    """Hamza'nın Transformer modelini yükler (varsa)."""
+def load_transformer_sentiment():
+    """BERTurk duygu modelini yükler (varsa)."""
     try:
-        from src.transformer_model import load_sentiment_model, load_summarization_model
-        sentiment_model = load_sentiment_model()
-        summarization_model = load_summarization_model()
-        return sentiment_model, summarization_model
-    except Exception:
-        return None, None
+        from src.transformer_model import load_sentiment_model
+        return load_sentiment_model()
+    except Exception as e:
+        print(f"Sentiment model yüklenemedi: {e}")
+        return None
+
+
+@st.cache_resource
+def load_transformer_summarizer():
+    """mT5 özetleme modelini yükler (varsa)."""
+    try:
+        from src.transformer_model import load_summarization_model
+        return load_summarization_model()
+    except Exception as e:
+        print(f"Summarization model yüklenemedi: {e}")
+        return None
+
+
+def load_transformer_model():
+    """Geriye dönük uyumluluk için tuple döndürür."""
+    return load_transformer_sentiment(), load_transformer_summarizer()
 
 
 def preprocess_text_cached(text: str) -> str:
