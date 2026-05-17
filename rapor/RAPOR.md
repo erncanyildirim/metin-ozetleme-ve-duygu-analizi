@@ -38,6 +38,12 @@ Bulgular, **BERTurk'ün F1-Macro skorunda Linear SVM'e göre +13.1 puan üstünl
 5. [SONUÇ VE ÖNERİLER](#5-sonuç-ve-öneriler)
 6. [KAYNAKÇA](#6-kaynakça)
 7. [EKLER](#7-ekler)
+   - Ek A: GitHub Deposu
+   - Ek B: Streamlit Demo
+   - Ek C: Eğitim Süreleri
+   - Ek D: Hiperparametre Detayları
+   - Ek E: Reproduce Edilebilirlik
+   - Ek F: Karşılaşılan Hatalar ve Çözümler
 
 ---
 
@@ -156,17 +162,81 @@ Türkçe için özel olarak uygulanan ön işleme adımları (`src/preprocessing
 7. **Tekrarlayan karakter düzeltimi** ("çoook" → "çook")
 8. **Fazla boşluk temizliği**
 
-> **Gözlemlenen Yan Etki:** Tekrarlayan karakter kuralı sayısal değerleri de etkilemiştir (örn. "4000mhz" → "400mhz"). Bu durum duygu analizini etkilememekle birlikte rapor 4.7'de tartışılmıştır.
+**Kod 3.1** — Ana ön işleme fonksiyonunun çekirdek mantığı:
+
+```python
+def preprocess_text(text, remove_stopwords=True, remove_emojis=True,
+                    remove_punctuation=True, fix_repeated_chars=True,
+                    min_word_length=2):
+    """Türkçe metni ön işleme adımlarından geçirir."""
+    if not isinstance(text, str) or not text.strip():
+        return ""
+
+    text = text.lower()                              # 1. Küçük harfe
+    text = URL_PATTERN.sub(" ", text)                # 2. URL temizle
+    text = EMAIL_PATTERN.sub(" ", text)              # 3. E-posta temizle
+    text = re.sub(r"<[^>]+>", " ", text)             # 4. HTML temizle
+
+    if remove_emojis:
+        text = EMOJI_PATTERN.sub(" ", text)          # 5. Emoji temizle
+
+    if remove_punctuation:
+        # ÖNEMLİ: Türkçe karakterleri (ç,ğ,ı,ö,ş,ü) koruyarak noktalama sil
+        text = re.sub(r"[^\w\sçğıöşüÇĞİÖŞÜ]", " ", text)
+
+    if fix_repeated_chars:
+        # "çoook" → "çook" (en fazla 2 tekrar)
+        text = REPEATED_CHARS_PATTERN.sub(r"\1\1", text)
+
+    text = re.sub(r"\s+", " ", text).strip()         # 6. Fazla boşluk
+
+    if remove_stopwords:
+        words = text.split()
+        # KRİTİK TASARIM KARARI: "değil", "yok", "ama" gibi duygu taşıyan
+        # kelimeleri stop-word LİSTESİNE DAHİL ETMEDİK
+        words = [w for w in words
+                 if w not in TURKISH_STOP_WORDS
+                 and len(w) >= min_word_length]
+        text = " ".join(words)
+
+    return text
+```
+
+> **Önemli Tasarım Kararı:** Türkçe stop-word listemizden **"değil", "yok", "ama", "hiç", "ancak"** gibi kelimeleri **bilinçli olarak çıkardık**. Klasik İngilizce stop-word listelerinde bu tür kelimeler atılır, ancak Türkçe duygu analizinde bunlar **polariteyi belirleyici** unsurlardır. Örneğin "iyi **değil**" cümlesinden "değil" atılırsa anlam tersine döner. Bu karar nötr ve negatif sınıfların doğruluğunu artırmıştır.
+
+**Gözlemlenen Yan Etki:** Tekrarlayan karakter kuralı sayısal değerleri de etkilemiştir (örn. "4000mhz" → "400mhz"). Bu durum duygu analizini etkilememekle birlikte rapor 4.7'de tartışılmıştır.
 
 ### 3.3. Özellik Çıkarımı: TF-IDF
 
-Baseline modelleri için **TF-IDF (Term Frequency–Inverse Document Frequency)** vektörizasyonu kullanılmıştır:
+Baseline modelleri için **TF-IDF (Term Frequency–Inverse Document Frequency)** vektörizasyonu kullanılmıştır. Bu yöntem, bir kelimenin bir dokümanda ne sıklıkta geçtiğini (TF), tüm korpustaki nadirliği (IDF) ile çarparak bir ağırlık üretir. Böylece "çok", "bir" gibi yaygın kelimeler daha düşük ağırlık alırken "harika", "berbat" gibi ayırt edici kelimeler ön plana çıkar.
 
-- **Max özellik:** 50.000 kelime
-- **N-gram aralığı:** Unigram + Bigram (1, 2)
-- **Sublinear TF:** Aktif (logaritmik ölçekleme)
-- **Min df:** 2 (en az 2 dokümanda geçen kelimeler)
-- **Max df:** 0.95 (çok yaygın kelimeler atılır)
+**Kod 3.2** — TF-IDF + SVM tek bir Pipeline olarak tanımlanmıştır:
+
+```python
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.svm import LinearSVC
+
+def create_svm_pipeline() -> Pipeline:
+    """TF-IDF + Linear SVM pipeline'ı oluşturur."""
+    return Pipeline([
+        ("tfidf", TfidfVectorizer(
+            max_features=50000,
+            ngram_range=(1, 2),       # Unigram + Bigram
+            sublinear_tf=True,        # Logaritmik TF (1 + log(tf))
+            min_df=2,                 # En az 2 dokümanda geçen kelimeler
+            max_df=0.95,              # %95'ten fazla dokümanda geçenleri at
+        )),
+        ("clf", LinearSVC(
+            C=1.0,
+            max_iter=10000,
+            random_state=42,
+            class_weight="balanced",  # KRİTİK: dengesiz sınıflar için
+        )),
+    ])
+```
+
+> **`class_weight='balanced'` kararı:** İlk denemelerde bu parametre olmadan SVM'in nötr sınıfı F1'i ~%5 civarındaydı. `balanced` ile her sınıf, frekansının tersi oranında ağırlıklandırıldı ve nötr F1'i %26'ya çıktı. Bu parametre, dengesiz veri setlerinde **olmazsa olmaz**.
 
 ### 3.4. Kullanılan Modeller
 
@@ -181,6 +251,7 @@ Baseline modelleri için **TF-IDF (Term Frequency–Inverse Document Frequency)*
 - **Alpha (Laplace smoothing):** 0.1
 
 #### 3.4.3. Transformer Model 1: BERTurk (Duygu Analizi)
+
 - **Mimari:** `dbmdz/bert-base-turkish-cased` (Schweter, 2020)
 - **Parametreler:** 110M parametre, 12 katman, 768 gizli boyut
 - **Fine-tuning:** Hepsiburada veri setinin dengeli bir alt kümesi üzerinde 3 epoch
@@ -190,11 +261,87 @@ Baseline modelleri için **TF-IDF (Term Frequency–Inverse Document Frequency)*
 - **Warmup ratio:** 0.1
 - **FP16 mixed precision:** Aktif (T4 GPU)
 
+**Kod 3.3** — BERTurk fine-tuning kurulumu:
+
+```python
+from transformers import (AutoTokenizer, AutoModelForSequenceClassification,
+                          TrainingArguments, Trainer, DataCollatorWithPadding)
+
+# 1) Model ve tokenizer'ı yükle (3 sınıflı çıktı için)
+tokenizer = AutoTokenizer.from_pretrained("dbmdz/bert-base-turkish-cased")
+model = AutoModelForSequenceClassification.from_pretrained(
+    "dbmdz/bert-base-turkish-cased",
+    num_labels=3,                         # negatif, nötr, pozitif
+    id2label={0: "negatif", 1: "nötr", 2: "pozitif"},
+    label2id={"negatif": 0, "nötr": 1, "pozitif": 2},
+)
+
+# 2) Eğitim argümanları — F1-Macro'ya göre erken durdurma
+training_args = TrainingArguments(
+    output_dir="models/berturk-sentiment",
+    num_train_epochs=3,
+    per_device_train_batch_size=16,
+    learning_rate=2e-5,
+    warmup_ratio=0.1,
+    weight_decay=0.01,
+    eval_strategy="epoch",
+    load_best_model_at_end=True,
+    metric_for_best_model="f1_macro",     # KRİTİK: accuracy değil F1!
+    fp16=True,                            # T4 GPU'da 2x hız kazanımı
+    seed=42,
+)
+
+# 3) Trainer (transformers >=4.46 için tokenizer parametresi kaldırılmıştır)
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_ds,
+    eval_dataset=val_ds,
+    data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
+    compute_metrics=compute_metrics,
+)
+
+trainer.train()
+```
+
+> **Tasarım Tercihi:** `metric_for_best_model="f1_macro"` ile **erken durdurma** F1-Macro'ya göre yapılıyor. Eğer accuracy kullansaydık model 1. epoch'tan sonra durabilirdi (%87 accuracy zaten yüksek görünüyor) ve nötr sınıfını öğrenemezdi.
+
 #### 3.4.4. Transformer Model 2: mT5-small (Özetleme)
 - **Mimari:** `ozcangundes/mt5-small-turkish-summarization` (Türkçe haber özetleme için fine-tune edilmiş)
 - **Parametreler:** ~300M parametre
 - **Kullanım Modu:** Zero-shot (ürün yorumları için fine-tune yapılmamıştır)
 - **Generation parametreleri:** num_beams=4, max_length=150, min_length=30, no_repeat_ngram_size=3, early_stopping=True
+
+**Kod 3.4** — mT5 ile özet üretme:
+
+```python
+import torch
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+
+tokenizer = AutoTokenizer.from_pretrained("ozcangundes/mt5-small-turkish-summarization")
+model = AutoModelForSeq2SeqLM.from_pretrained("ozcangundes/mt5-small-turkish-summarization")
+model = model.to("cuda")
+
+def summarize_reviews(reviews, max_length=150, min_length=30):
+    """Birden fazla yorumu birleştirip özet üretir."""
+    combined = " ".join(reviews)
+    inputs = tokenizer(combined, return_tensors="pt",
+                       max_length=512, truncation=True).to("cuda")
+
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_length=max_length,
+            min_length=min_length,
+            num_beams=4,              # Beam search → daha kaliteli özet
+            no_repeat_ngram_size=3,   # KRİTİK: tekrarlamayı engeller
+            early_stopping=True,
+        )
+
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+```
+
+> **`no_repeat_ngram_size=3` öncesi/sonrası:** Bu parametre olmadan model "kargo, kargo, kargo, kargo..." gibi şiddetli tekrarlamalar üretiyordu (Bölüm 4.5'te örneği var). Bu parametre ile aynı 3-gram'ın iki kez geçmesi engelleniyor, ama hallucination problemi devam etti (alana özel fine-tune gerekli).
 
 ### 3.5. Değerlendirme Metrikleri
 
@@ -260,11 +407,34 @@ Baseline modelleri için **TF-IDF (Term Frequency–Inverse Document Frequency)*
 
 > **Önemli Gözlem:** Veri seti **şiddetli dengesizlik** göstermektedir. Pozitif sınıf, negatifin yaklaşık 11 katı, nötrün 20 katıdır. Bu, gerçek dünya e-ticaret verilerinde tipiktir (insanlar genellikle memnun kaldıklarında yorum yazma eğilimindedir) ve modellerin değerlendirilmesi için **Accuracy yerine F1-Macro** kullanımını zorunlu kılar.
 
-**Şekiller:**
-- *Şekil 4.1:* Sınıf dağılımı (pasta + bar) — `rapor/sekil_4_1_sinif_dagilimi.png`
-- *Şekil 4.2:* Yorum uzunluk dağılımı (histogram + boxplot) — `rapor/sekil_4_2_uzunluk_dagilimi.png`
-- *Şekil 4.3:* En sık 20 kelime — `rapor/sekil_4_3_en_sik_kelimeler.png`
-- *Şekil 4.3b:* Sınıf bazlı en sık kelimeler — `rapor/sekil_4_3b_sinif_bazli_kelimeler.png`
+**Şekil 4.1 — Sınıf Dağılımı:**
+
+![Şekil 4.1: Sınıf Dağılımı](sekil_4_1_sinif_dagilimi.png)
+
+Pasta grafiği ve bar chart, veri setindeki şiddetli dengesizliği görsel olarak ortaya koymaktadır. Pozitif sınıf (128.569) hâkim çoğunluktayken, nötr sınıf (6.346) sadece %4.3'lük bir paya sahiptir.
+
+**Şekil 4.2 — Yorum Uzunluk Dağılımı:**
+
+![Şekil 4.2: Yorum Uzunluk Dağılımı](sekil_4_2_uzunluk_dagilimi.png)
+
+Histogram, yorumların büyük çoğunluğunun 5-15 kelime aralığında yoğunlaştığını göstermektedir (ortalama 9.7 kelime). Sağ taraftaki boxplot, sınıflar arasında uzunluk açısından dramatik bir fark olmadığını ortaya koyar — yani yorum uzunluğu duygu sınıflandırması için ayırt edici bir özellik DEĞİLDİR.
+
+**Şekil 4.3 — En Sık 20 Kelime (Ön İşleme Sonrası):**
+
+![Şekil 4.3: En Sık Kelimeler](sekil_4_3_en_sik_kelimeler.png)
+
+"ürün", "güzel", "iyi", "ama" gibi kelimeler ön plandadır. Stop-word listesine "ama" gibi duygu taşıyan kelimeleri **dahil etmediğimiz** için bunlar listede yer almıştır — bu kelimeler özellikle nötr ve negatif yorumlarda kritik rol oynar.
+
+**Şekil 4.3b — Sınıf Bazlı En Sık Kelimeler:**
+
+![Şekil 4.3b: Sınıf Bazlı Kelimeler](sekil_4_3b_sinif_bazli_kelimeler.png)
+
+> **Önemli bulgu:** Sınıflar dilsel olarak **net biçimde ayrışmaktadır**:
+> - **Pozitif sınıf**: "güzel", "iyi", "kaliteli", "tavsiye", "hızlı", "teşekkürler" → klasik memnuniyet ifadeleri
+> - **Nötr sınıf**: "ama", "değil", "fakat", "biraz", "iade" → tereddüt ve dengeli ifadeler
+> - **Negatif sınıf**: "iade", "yok", "kötü", "hiç", "kesinlikle" → red ve şikâyet ifadeleri
+>
+> Bu ayrışma, hem SVM hem de BERTurk modellerinin başarılı olabileceğinin ön göstergesidir.
 
 **Sınıf Bazlı Karakteristik Kelimeler (Ön İşleme Sonrası):**
 
@@ -299,8 +469,19 @@ Baseline modelleri için **TF-IDF (Term Frequency–Inverse Document Frequency)*
 
 > **Kritik gözlem:** NB'nin Accuracy'si yüksek görünmesine rağmen F1-Macro daha düşüktür → **Accuracy sınıf dengesizliğinde yanıltıcıdır**. SVM, dengesizliği `class_weight='balanced'` ile daha iyi yönetmektedir. Her iki model de **nötr sınıfında zayıftır** (3 yıldızlı yorumlar dilsel olarak karışıktır).
 
-*Şekil 4.4:* Baseline modellerin karşılaştırma grafiği — `rapor/sekil_4_4_baseline_karsilastirma.png`
-*Şekil 4.4b:* Naive Bayes & SVM Confusion Matrix — `rapor/sekil_4_4b_confusion_matrix.png`
+**Şekil 4.4 — Baseline Modeller Performans Karşılaştırması:**
+
+![Şekil 4.4: Baseline Karşılaştırma](sekil_4_4_baseline_karsilastirma.png)
+
+Accuracy'de iki model neredeyse aynı (NB %91.3, SVM %90.2), ancak F1-Macro'da SVM (0.626) Naive Bayes'i (0.584) belirgin şekilde geçmektedir. Bu fark **sınıf dengesizliğinin yarattığı yanıltıcı accuracy etkisinin** açık kanıtıdır.
+
+**Şekil 4.4b — Naive Bayes ve SVM Confusion Matrix:**
+
+![Şekil 4.4b: Confusion Matrix](sekil_4_4b_confusion_matrix.png)
+
+Confusion matrix'ler iki modelin **farklı hata profillerini** ortaya koyar:
+- **Naive Bayes**: Nötr örneklerin 937'sini (toplam 1.269'un %74'ünü) yanlışlıkla pozitif olarak sınıflandırmıştır. Model temel olarak "yüksek frekanslı pozitif sınıfa yatkın" davranır.
+- **SVM**: Aynı durumda 591 nötr → pozitif hatası yapar (daha az), ancak negatif sınıfta SVM daha başarılı (1620/2349 doğru). Bu, `class_weight='balanced'` parametresinin etkisini göstermektedir.
 
 #### 4.4.2. BERTurk Fine-Tuning Sonuçları (30K Alt Küme)
 
@@ -346,10 +527,41 @@ Baseline modelleri için **TF-IDF (Term Frequency–Inverse Document Frequency)*
 
 > 🎯 **En çarpıcı bulgu:** BERTurk **nötr sınıfında SVM'in 3.5 katı başarılı**. SVM nötrleri büyük oranda pozitife karıştırırken, BERTurk nötrü doğru tanıyor.
 
-*Şekil 4.5:* SVM vs BERTurk performans karşılaştırması — `rapor/sekil_4_5_baseline_vs_bert.png`
-*Şekil 4.5b:* Yan yana confusion matrix — `rapor/sekil_4_5b_confusion_compare.png`
+**Şekil 4.5 — Baseline (SVM) vs Transformer (BERTurk):**
+
+![Şekil 4.5: SVM vs BERTurk](sekil_4_5_baseline_vs_bert.png)
+
+Accuracy'de iki model neredeyse eşit görünür (~%88-89), fakat **F1-Macro'da BERTurk (0.715) SVM'i (0.619) belirgin biçimde geçer**. Bu, BERTurk'ün dengesiz veri setinde **gerçek üstünlüğünü** F1-Macro üzerinden gözler önüne serer.
+
+**Şekil 4.5b — SVM vs BERTurk Confusion Matrix:**
+
+![Şekil 4.5b: Confusion Karşılaştırma](sekil_4_5b_confusion_compare.png)
+
+İki confusion matrix yan yana incelendiğinde **fark net bir şekilde görülür**:
+- **SVM** (sol): Nötr satırı (97 örnek) → sadece **23 doğru** tahmin. Geri kalan nötrler ya negatif (26) ya da pozitif (48) sınıflarına dağılmış.
+- **BERTurk** (sağ): Aynı nötr satırı → **79 doğru** tahmin. Sadece 18 örnek yanlış sınıflanmış. **3.4 kat iyileşme.**
+
+Ayrıca BERTurk'ün negatif sınıfta da SVM'den daha tutarlı olduğu görülmektedir (135 vs 112 doğru tahmin).
 
 #### 4.4.4. Demo Tahminler — Kalitatif Analiz
+
+**Kod 4.1** — Tek bir yorum için BERTurk ile tahmin yapma:
+
+```python
+from transformers import pipeline
+
+# Pipeline doğrudan kullanılabilir (sentiment-analysis task'ı standart)
+sentiment_pipeline = pipeline(
+    "sentiment-analysis",
+    model="models/berturk-sentiment",      # Fine-tune ettiğimiz model
+    tokenizer="models/berturk-sentiment",
+    device=0,                              # GPU
+)
+
+# Tek bir cümle için tahmin
+result = sentiment_pipeline("Bu ürün kesinlikle harika, çok memnun kaldım")
+# Çıktı: [{'label': 'pozitif', 'score': 0.982}]
+```
 
 | Yorum | SVM Tahmini | BERTurk Tahmini | BERTurk Skoru | Yorum |
 |-------|:---:|:---:|:---:|-------|
@@ -360,6 +572,8 @@ Baseline modelleri için **TF-IDF (Term Frequency–Inverse Document Frequency)*
 | **"Yorumlardan etkilenip aldım, hata yapmışım"** | **pozitif** ❌ | **negatif** ✅ | 0.843 | 🎯 **İRONİ TESPİTİ** |
 
 > 🎯 **Son örnek özellikle önemli:** Cümlede hiçbir açık negatif kelime (kötü, berbat, bozuk vb.) yoktur. Negatiflik tamamen **bağlamsal**: "hata yapmışım" yorumdan pişman olduğunu ima eder. BERTurk bunu yakalamıştır. Bu, **Hipotez H5'i doğrular** ve klasik TF-IDF tabanlı modellerin yapısal sınırlamasının somut bir kanıtıdır.
+
+> 💡 **Neden BERTurk bunu yakalayabildi?** BERT'in mimarisi, her kelimeyi **bağlamına göre** kodlar (contextual embeddings). "hata" kelimesi tek başına nötr bir kelime olabilir, ama "hata **yapmışım**" şeklindeki bir özdeleştirme ifadesinde negatif yönde işlenir. TF-IDF ise her kelimeyi bağımsız bir özellik olarak alır — bu nedenle SVM bu örneği yakalayamaz.
 
 ### 4.5. Metin Özetleme Sonuçları (mT5-small Zero-Shot)
 
@@ -545,6 +759,122 @@ Tüm sonuçlar `random_state=42` ile üretilmiştir. Notebook'lar GitHub deposun
 - `notebooks/01_veri_kesfi_ve_onisleme.ipynb`
 - `notebooks/02_baseline_model.ipynb`
 - `notebooks/03_transformer_model.ipynb`
+
+### Ek F: Karşılaşılan Hatalar ve Çözümler
+
+Proje sürecinde transformers kütüphanesinin son sürümleri (`>=4.46`) ile uyumluluk sorunları yaşanmış ve giderilmiştir. Bunlar deneyimsel öğrenmenin bir parçası olduğu için raporda belgelenmiştir.
+
+#### Hata 1: `Trainer.__init__() got an unexpected keyword argument 'tokenizer'`
+
+**Bağlam:** `transformers 4.46+` sürümünde `Trainer` sınıfının `tokenizer` parametresi kaldırılmış, yerine `processing_class` getirilmiştir.
+
+**Hatalı kod (eski API):**
+```python
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_ds,
+    eval_dataset=val_ds,
+    tokenizer=tokenizer,              # ❌ Yeni sürümde HATA verir
+    data_collator=data_collator,
+    compute_metrics=compute_metrics,
+)
+```
+
+**Çözüm (yeni API):**
+```python
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_ds,
+    eval_dataset=val_ds,
+    data_collator=data_collator,       # ✅ Tokenizer zaten data_collator içinde
+    compute_metrics=compute_metrics,
+)
+# Tokenizer'ı manuel kaydet (eskiden Trainer otomatik kaydederdi)
+tokenizer.save_pretrained(SENTIMENT_OUTPUT_DIR)
+```
+
+**Ders:** Üretim kodu yazarken kütüphane sürümlerini sabitlemek (`transformers==4.46.0` gibi) ve sürüm değişikliklerinden önce dokümantasyondan kontrol etmek kritik.
+
+#### Hata 2: `KeyError: "Unknown task summarization"`
+
+**Bağlam:** `transformers 4.46+`'da `pipeline("summarization")` task'ı destek listesinden çıkarılmıştır. Bu task artık `pipeline("text2text-generation")` veya doğrudan `model.generate()` ile yapılır.
+
+**Hatalı kod (eski API):**
+```python
+from transformers import pipeline
+summarizer = pipeline("summarization", model=model, tokenizer=tokenizer)
+result = summarizer(text, max_length=150, min_length=30)
+# ❌ KeyError: "Unknown task summarization"
+```
+
+**Çözüm (doğrudan model.generate kullanmak):**
+```python
+import torch
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to("cuda")
+
+def summarize(text, max_length=150, min_length=30):
+    inputs = tokenizer(text, return_tensors="pt",
+                       max_length=512, truncation=True).to("cuda")
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_length=max_length,
+            min_length=min_length,
+            num_beams=4,
+            no_repeat_ngram_size=3,   # ✅ Tekrarlama cezası
+            early_stopping=True,
+        )
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+```
+
+**Ders:** `pipeline()` yüksek-seviye soyutlamadır ve sürüme bağlı kırılgan davranabilir. Doğrudan `model.generate()` ile çalışmak daha **sürüm bağımsız** ve **kontrol edilebilirdir**.
+
+#### Hata 3: Colab Oturum Kaybı
+
+**Bağlam:** Google Colab ücretsiz katmanda, inactivity sonrası runtime'ı kapatır. 30 dakikalık BERTurk eğitimi sonrası model dosyaları kaybolabilir.
+
+**Çözüm Stratejisi:**
+
+```python
+# Eğitim biter bitmez Drive'a yedekle
+from google.colab import drive
+drive.mount('/content/drive')
+
+!mkdir -p /content/drive/MyDrive/nlp_projesi/models
+!cp -r models/berturk-sentiment /content/drive/MyDrive/nlp_projesi/models/
+```
+
+**Ders:** Uzun süren eğitimlerden sonra ÇIKTILARI HEMEN kalıcı depoya (Drive, S3 vb.) yedeklemek zorunludur. Yoksa 30 dakikalık emek 5 dakikalık inactivity ile kaybolur.
+
+#### Hata 4: Sayısal Değerlerin Bozulması
+
+**Bağlam:** Ön işleme adımındaki `REPEATED_CHARS_PATTERN = r"(.)\1{2,}"` kuralı, "çoooook" → "çook" düzeltimini hedeflerken yan etki olarak "4000mhz" → "400mhz" gibi sayısal değerleri de bozdu.
+
+**Etki:** Duygu analizi etkilenmedi (sayılar duygu için kritik değil), ancak teknik içerikli yorumlarda spesifik bilgi kaybı yaşandı.
+
+**Olası Çözüm (gelecek çalışmada):**
+```python
+# Sayıları regex ile koru, sonra tekrar yerleştir
+import re
+def safe_repeat_fix(text):
+    # 1. Sayıları geçici placeholder ile değiştir
+    numbers = re.findall(r'\d+', text)
+    for i, n in enumerate(numbers):
+        text = text.replace(n, f'__NUM{i}__', 1)
+    # 2. Tekrar düzeltimini uygula
+    text = re.sub(r'(.)\1{2,}', r'\1\1', text)
+    # 3. Sayıları geri koy
+    for i, n in enumerate(numbers):
+        text = text.replace(f'__NUM{i}__', n)
+    return text
+```
+
+**Ders:** Regex tabanlı temizlik kuralları genelde "düz metin" varsayımıyla yazılır. Teknik içerikli korpuslarda **sayıları korumak için ek bir adım** gerekir.
 
 ---
 
