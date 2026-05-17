@@ -222,12 +222,14 @@ def train_sentiment_model(
     )
 
     # --- Trainer ---
+    # Not: Yeni transformers sürümlerinde (>=4.46) tokenizer parametresi yerine
+    # processing_class kullanılıyor. data_collator zaten tokenizer'ı içerdiği için
+    # tokenizer parametresini Trainer'a geçmeye gerek yok.
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
